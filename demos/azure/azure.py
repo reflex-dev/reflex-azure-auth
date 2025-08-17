@@ -20,7 +20,8 @@ def index():
                         rx.button("Logout", on_click=AzureAuthState.redirect_to_logout),
                     ),
                     rx.button(
-                        "Log In with Microsoft", on_click=AzureAuthState.redirect_to_login
+                        "Log In with Microsoft",
+                        on_click=AzureAuthState.redirect_to_login,
                     ),
                 ),
                 rx.spinner(),

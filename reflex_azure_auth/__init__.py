@@ -23,7 +23,7 @@ from authlib.jose import JsonWebKey, jwt
 from reflex_enterprise import App
 
 # Simple cached OIDC metadata + JWKS loader
-_OIDC_CACHE: dict[str, object] = {}
+_OIDC_CACHE: dict[str, dict] = {}
 
 
 async def _fetch_oidc_metadata(issuer: str) -> dict:
@@ -36,7 +36,6 @@ async def _fetch_oidc_metadata(issuer: str) -> dict:
         resp.raise_for_status()
         md = resp.json()
         _OIDC_CACHE[key] = md
-        print(md)
         return md
 
 
@@ -114,7 +113,7 @@ def _get_jwt_header_payload(token: str) -> tuple[dict, dict]:
             _b64_json_decode(parts[0]),
             _b64_json_decode(parts[1]),
         )
-    return {}
+    return {}, {}
 
 
 def _compute_at_hash(access_token: str, alg: str | None) -> str:
@@ -312,10 +311,9 @@ class AzureAuthState(rx.State):
                 at_hash_claim
                 and hasattr(self, "_expected_at_hash")
                 and self._expected_at_hash
-            ):
-                if at_hash_claim != self._expected_at_hash:
-                    print("at_hash mismatch")  # noqa: T201
-                    return False
+            ) and at_hash_claim != self._expected_at_hash:
+                print("at_hash mismatch")  # noqa: T201
+                return False
         except Exception:
             return False
 
