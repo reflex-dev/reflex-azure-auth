@@ -1,1 +1,1 @@
-reflex-azure-auth>=0.1
+reflex-azure-auth>=0
