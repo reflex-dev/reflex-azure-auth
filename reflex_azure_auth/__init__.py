@@ -22,6 +22,12 @@ import reflex as rx
 from authlib.jose import JsonWebKey, jwt
 from reflex_enterprise import App
 
+from .message_listener import WindowMessage, message_listener
+
+MSA_ISSUER = (
+    "9188040d-6c67-4c5b-b112-36a304b66dad"  # Microsoft identity platform issuer ID
+)
+
 # Simple cached OIDC metadata + JWKS loader
 _OIDC_CACHE: dict[str, dict] = {}
 
@@ -49,6 +55,22 @@ async def _fetch_jwks(jwks_uri: str) -> dict:
         jwks = resp.json()
         _OIDC_CACHE[key] = jwks
         return jwks
+
+
+def _valid_issuers(issuer: str) -> list[str]:
+    if "/common/" in issuer or "/organizations/" in issuer or "/{tenant_id}/" in issuer:
+        valid_tenant_ids = azure_valid_tenant_ids()
+        issuer_template = issuer.replace("/common/", "/{tenant_id}/").replace(
+            "/organizations/", "/{tenant_id}/"
+        )
+        return [
+            issuer_template.format(tenant_id=tenant_id)
+            for tenant_id in valid_tenant_ids
+            if tenant_id.strip()
+        ]
+    elif "/consumers/" in issuer:
+        return [issuer.replace("/consumers/", f"/{MSA_ISSUER}/")]
+    return [issuer]
 
 
 async def verify_jwt(
@@ -83,8 +105,10 @@ async def verify_jwt(
     aud = claims.get("aud")
     if audience and aud != audience and (isinstance(aud, list) and audience not in aud):
         raise RuntimeError(f"Invalid audience: {claims.get('aud')} != {audience}")
-    if claims.get("iss") != issuer:
-        raise RuntimeError(f"Invalid issuer: {claims.get('iss')} != {issuer}")
+    if claims.get("iss") not in (valid_issuers := _valid_issuers(issuer)):
+        raise RuntimeError(
+            f"Invalid issuer: {claims.get('iss')} not in {valid_issuers}"
+        )
     # expiration check
     exp = claims.get("exp")
     if exp is None or int(exp) < int(datetime.datetime.utcnow().timestamp()):
@@ -202,6 +226,18 @@ async def azure_issuer_endpoint(service: str) -> str:
     return (await _fetch_oidc_metadata(azure_issuer_uri()))[service]
 
 
+def azure_valid_tenant_ids() -> list[str]:
+    """Read the list of valid tenant_id from environment.
+
+    Note: this list is only used when the issuer endpoint contains "common" or
+    "organizations".
+
+    Returns:
+        A list of valid tenant IDs that may issue tokens.
+    """
+    return os.environ.get("AZURE_VALID_TENANT_IDS", "").split(",")
+
+
 class AzureUserInfo(TypedDict):
     """TypedDict representing user information from Azure / Microsoft identity platform.
 
@@ -252,8 +288,8 @@ class AzureAuthState(rx.State):
     validation, and user information retrieval.
     """
 
-    access_token: str = rx.LocalStorage()
-    id_token: str = rx.LocalStorage()
+    access_token: str = rx.Cookie()
+    id_token: str = rx.Cookie()
 
     app_state: str
     code_verifier: str
@@ -261,6 +297,7 @@ class AzureAuthState(rx.State):
     redirect_to_url: str
     error_message: str
 
+    is_iframed: bool = False
     _requested_scopes: str = "openid email profile"
     _expected_at_hash: str | None = None
 
@@ -319,15 +356,10 @@ class AzureAuthState(rx.State):
 
         return True
 
-    @rx.var(interval=datetime.timedelta(minutes=30))
-    async def userinfo(self) -> AzureUserInfo | None:
-        """Get the authenticated user's information from the Microsoft identity platform.
-
-        This property retrieves the user's profile information from the
-        userinfo endpoint using the stored access token. The result is cached
-        for 30 minutes and automatically revalidated.
-        """
+    async def _update_userinfo(self):
         if not await self._validate_tokens(expiration_only=True):
+            self.access_token = ""
+            self.id_token = ""
             return None
 
         # Get the latest userinfo
@@ -341,6 +373,16 @@ class AzureAuthState(rx.State):
                 return user_info_from_dict(resp.json())
             return None
 
+    @rx.var(interval=datetime.timedelta(minutes=30))
+    async def userinfo(self) -> AzureUserInfo | None:
+        """Get the authenticated user's information from the Microsoft identity platform.
+
+        This property retrieves the user's profile information from the
+        userinfo endpoint using the stored access token. The result is cached
+        for 30 minutes and automatically revalidated.
+        """
+        return await self._update_userinfo()
+
     def _redirect_uri(self) -> str:
         current_url = urlparse(self.router.url)
         return current_url._replace(
@@ -352,12 +394,29 @@ class AzureAuthState(rx.State):
         return current_url._replace(path="/", query=None, fragment=None).geturl()
 
     @rx.event
+    async def redirect_to_login_popup(self):
+        return rx.call_script(
+            "window.open('/popup-login', 'login', 'width=600,height=600')"
+        )
+
+    @rx.event
+    async def redirect_to_logout_popup(self):
+        return rx.call_script(
+            "window.open('/popup-logout', 'logout', 'width=600,height=600')"
+        )
+
+    @rx.event
     async def redirect_to_login(self):
         """Initiate the OAuth 2.0 authorization code flow with PKCE against Azure.
 
         Generates state and code verifier, builds the authorization URL, and
         redirects the user to the Microsoft authorization endpoint.
         """
+        if self.is_iframed:
+            return type(self).redirect_to_login_popup()
+        if await self._validate_tokens(expiration_only=True):
+            return rx.toast("You are logged in.")
+
         # store app state and code verifier in session
         self.app_state = secrets.token_urlsafe(64)
         self.code_verifier = secrets.token_urlsafe(64)
@@ -394,6 +453,9 @@ class AzureAuthState(rx.State):
 
         Builds the logout URL with the ID token hint and redirects the user.
         """
+        if self.is_iframed:
+            return type(self).redirect_to_logout_popup()
+
         # store app state in session
         self.app_state = secrets.token_urlsafe(64)
 
@@ -444,8 +506,16 @@ class AzureAuthState(rx.State):
         if not exchange.get("token_type"):
             self.error_message = "Unsupported token type. Should be 'Bearer'."
             return rx.toast.error("Authentication error")
-        self.access_token = exchange["access_token"]
-        self.id_token = exchange["id_token"]
+        await self._set_tokens(
+            access_token=exchange["access_token"],
+            id_token=exchange["id_token"],
+        )
+
+        return rx.redirect(self.redirect_to_url)
+
+    async def _set_tokens(self, access_token: str, id_token: str):
+        self.access_token = access_token
+        self.id_token = id_token
 
         # compute at_hash and store for additional validation
         try:
@@ -457,7 +527,75 @@ class AzureAuthState(rx.State):
         except Exception:
             self._expected_at_hash = None
 
-        return rx.redirect(self.redirect_to_url)
+        await self._validate_tokens()
+
+    @rx.var
+    def origin(self) -> str:
+        return self._index_uri().rstrip("/")
+
+    @rx.event
+    def check_if_iframed(self):
+        return rx.call_function(
+            """() => {
+  try {
+    return window.self !== window.top;
+  } catch (e) {
+    // This catch block handles potential security errors (Same-Origin Policy)
+    // if the iframe content and the parent are from different origins.
+    // In such cases, access to window.top might be restricted, implying it's in an iframe.
+    return true;
+  }
+}""",
+            callback=type(self).check_if_iframed_cb,
+        )
+
+    @rx.event
+    def check_if_iframed_cb(self, is_iframed: bool):
+        self.is_iframed = is_iframed
+
+    @rx.event
+    async def on_iframe_auth_success(self, event: WindowMessage):
+        if event["data"].get("type") != "auth":
+            return
+        self.nonce = event["data"].get("nonce", self.nonce)
+        await self._set_tokens(
+            access_token=event["data"].get("access_token"),
+            id_token=event["data"].get("id_token"),
+        )
+
+    @rx.event
+    def post_auth_message(self):
+        payload = {
+            "type": "auth",
+            "access_token": self.access_token,
+            "id_token": self.id_token,
+            "nonce": self.nonce,
+        }
+        return [
+            rx.call_function(
+                rx.vars.FunctionStringVar.create("window.opener.postMessage")(
+                    payload, self.origin
+                )
+            ),
+            rx.call_script("window.setTimeout(() => window.close(), 500)"),
+        ]
+
+
+def azure_login_button(*children) -> rx.Component:
+    if not children:
+        children = [rx.button("Login with Microsoft")]
+    return rx.el.div(
+        *children,
+        rx.cond(
+            AzureAuthState.is_iframed,
+            message_listener(
+                allowed_origin=AzureAuthState.origin,
+                on_message=AzureAuthState.on_iframe_auth_success,
+            ),
+        ),
+        on_click=AzureAuthState.redirect_to_login,
+        on_mount=AzureAuthState.check_if_iframed,
+    )
 
 
 def _authentication_loading_page() -> rx.Component:
@@ -474,6 +612,32 @@ def _authentication_loading_page() -> rx.Component:
                 rx.heading("Redirecting to app..."),
             ),
         ),
+    )
+
+
+def _authentication_popup() -> rx.Component:
+    return rx.container(
+        rx.vstack(
+            rx.cond(
+                ~rx.State.is_hydrated | ~AzureAuthState.userinfo,
+                rx.hstack(
+                    rx.heading("Validating Authentication..."),
+                    rx.spinner(),
+                    width="50%",
+                    justify="between",
+                ),
+                rx.heading(
+                    "Successfully logged in, you may close this window.",
+                    on_mount=AzureAuthState.post_auth_message,
+                ),
+            ),
+        ),
+    )
+
+
+def _authentication_logout() -> rx.Component:
+    return rx.container(
+        rx.heading("Complete logout process."),
     )
 
 
@@ -506,4 +670,16 @@ def register_auth_endpoints(
         route="/authorization-code/callback",
         on_load=AzureAuthState.auth_callback,
         title="Azure Auth Callback",
+    )
+    app.add_page(
+        _authentication_popup,
+        route="/popup-login",
+        on_load=AzureAuthState.redirect_to_login,
+        title="Azure Auth Initiator",
+    )
+    app.add_page(
+        _authentication_logout,
+        route="/popup-logout",
+        on_load=AzureAuthState.redirect_to_logout,
+        title="Azure Auth Logout",
     )
