@@ -95,7 +95,7 @@ async def verify_jwt(
         )
     # expiration check
     exp = claims.get("exp")
-    if exp is None or int(exp) < int(datetime.datetime.utcnow().timestamp()):
+    if exp is None or int(exp) < int(datetime.datetime.now(datetime.timezone.utc).timestamp()):
         raise RuntimeError("Token expired")
     return claims
 

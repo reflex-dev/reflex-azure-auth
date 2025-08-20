@@ -92,7 +92,7 @@ async def test_fetch_oidc_and_jwks(monkeypatch):
                         "aud": "api://default",
                         "exp": int(
                             (
-                                datetime.datetime.utcnow()
+                                datetime.datetime.now(datetime.timezone.utc)
                                 + datetime.timedelta(minutes=5)
                             ).timestamp()
                         ),
