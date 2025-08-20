@@ -52,35 +52,10 @@ def _authentication_loading_page() -> rx.Component:
     )
 
 
-def _authentication_popup() -> rx.Component:
-    """Popup page shown when authentication completes inside a popup window.
-
-    On successful authentication this page triggers `AzureAuthState.post_auth_message`
-    to communicate tokens back to the opener.
-    """
-    return rx.container(
-        rx.vstack(
-            rx.cond(
-                ~rx.State.is_hydrated | ~AzureAuthState.userinfo,
-                rx.hstack(
-                    rx.heading("Validating Authentication..."),
-                    rx.spinner(),
-                    width="50%",
-                    justify="between",
-                ),
-                rx.heading(
-                    "Successfully logged in, you may close this window.",
-                    on_mount=AzureAuthState.post_auth_message,
-                ),
-            ),
-        ),
-    )
-
-
-def _authentication_logout() -> rx.Component:
+def _authentication_popup_logout() -> rx.Component:
     """Simple page shown during the logout flow.
 
-    Registered at `/popup-logout` to complete the sign-out handshake.
+    Registered at `/reflex-azure-auth/popup-logout` to complete the sign-out handshake.
     """
     return rx.container(
         rx.heading("Complete logout process."),

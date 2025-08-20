@@ -27,16 +27,6 @@ def client_secret() -> str:
     return os.environ.get("AZURE_CLIENT_SECRET", "")
 
 
-def audience() -> str:
-    """Get the Azure audience (optional) from environment variables.
-
-    Returns:
-        The audience from the AZURE_AUDIENCE environment variable,
-        or "api://default" if not set.
-    """
-    return os.environ.get("AZURE_AUDIENCE", "api://default")
-
-
 def azure_issuer_uri() -> str:
     """Return the AZURE_ISSUER_URI environment variable or raise.
 

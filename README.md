@@ -31,19 +31,19 @@ Reflex will need to access these variables to authenticate users via OpenID Conn
     - Redirect URI: add the authorization callback path for your app, e.g. `https://your-app.example.com/authorization-code/callback` (use `http://localhost:3000/authorization-code/callback` for local development).
 3. Register the app and copy the "Application (client) ID" → this is `AZURE_CLIENT_ID`.
 4. Under "Certificates & secrets" create a new client secret and copy the value → this is `AZURE_CLIENT_SECRET`.
-5. Under "Expose an API" or "API permissions" add the scopes your app needs. For typical OpenID Connect sign-in, request the `openid`, `profile`, and `email` scopes. If you need access to a custom API, expose an application ID URI (e.g. `api://<client-id>`) and create delegated scopes.
-6. Determine your issuer (authority) URL:
-    - For a single tenant: `https://login.microsoftonline.com/<your-tenant-id>`
-    - For common/multi-tenant flows: `https://login.microsoftonline.com/common`
-    Use the `AZURE_ISSUER_URI` env var to set this (you can include the `/v2.0` suffix or we default to `v2.0` for endpoint assembly).
+5. Under "Expose an API" or "API permissions" add the scopes your app needs. For typical OpenID Connect sign-in, request the `openid`, `profile`, and `email` scopes.
+6. Determine your issuer (authority) URL as `AZURE_ISSUER_URI` env var.
+    - For a single tenant: `https://login.microsoftonline.com/<your-tenant-id>/v2.0`
+    - For common/multi-tenant flows: `https://login.microsoftonline.com/common/v2.0`
+7. For multi-tenant apps, you can use the `AZURE_VALID_TENANT_IDS` env var to specify which comma-separated tenant IDs are allowed.
 
 Example .env (local development):
 
 ```env
 AZURE_CLIENT_ID=00000000-0000-0000-0000-000000000000
 AZURE_CLIENT_SECRET=very-secret-value
-AZURE_ISSUER_URI=https://login.microsoftonline.com/common
-AZURE_AUDIENCE=api://default
+AZURE_ISSUER_URI=https://login.microsoftonline.com/consumers/v2.0
+AZURE_VALID_TENANT_IDS=00000000-0000-0000-0000-000000000000,9188040d-6c67-4c5b-b112-36a304b66dad
 ```
 
 Notes:
@@ -65,9 +65,11 @@ register_auth_endpoints(app)
 
 ### Check `AzureAuthState.userinfo` for user identity/validity
 
+To fully support embedded/iframe apps, be sure to wrap your login button with `azure_login_button`.
+
 ```python
 import reflex as rx
-from reflex_azure_auth import AzureAuthState
+from reflex_azure_auth import AzureAuthState, azure_login_button
 
 @rx.page()
 def index():
@@ -83,7 +85,9 @@ def index():
                         rx.text(AzureAuthState.userinfo.to_string()),
                         rx.button("Logout", on_click=AzureAuthState.redirect_to_logout),
                     ),
-                    rx.button("Log In with Microsoft", on_click=AzureAuthState.redirect_to_login),
+                    azure_login_button(
+                        rx.button("Log In with Microsoft"),
+                    ),
                 ),
                 rx.spinner(),
             ),
@@ -97,3 +101,28 @@ tokens to ensure they have not been tampered with. Use
 Before performing privileged backend operations, it is important to validate the
 tokens to ensure they have not been tampered with. Use
 `AzureAuthState._validate_tokens()` helper method to validate the tokens.
+
+### Customize the UI
+
+The `register_auth_endpoints` function accepts 3 optional UI callables:
+
+#### `loading_page`
+
+This is the page displayed before and after redirecting to the Azure authorization endpoint.
+
+The default implementation uses  `rx.cond(~rx.State.is_hydrated | ~AzureAuthState.userinfo, ...)`
+to show a different message based on whether the user info was fetched or not.
+
+#### `popup_login_page`
+
+When the app is within an iframe, the normal redirect flow cannot be used, so
+the authentication is handled within a popup window. This callable returns the
+page displayed in the popup window before and after redirecting to the Azure
+authorization endpoint.
+
+#### `popup_logout_page`
+
+When the app is within an iframe, the normal redirect flow cannot be used, so
+the authentication is handled within a popup window. This callable returns the
+page displayed in the popup window before redirecting to the Azure
+logout endpoint.

@@ -3,6 +3,7 @@
 import base64
 import datetime
 import hashlib
+import os
 import secrets
 from urllib.parse import urlencode, urlparse
 
@@ -10,6 +11,7 @@ import httpx
 import reflex as rx
 
 from .config import client_id, client_secret
+from .funcs import POST_MESSAGE_AND_CLOSE_POPUP, WINDOW_OPEN
 from .message_listener import WindowMessage
 from .oidc import (
     _compute_at_hash,
@@ -19,6 +21,16 @@ from .oidc import (
     verify_jwt,
 )
 from .types import AzureUserInfo, user_info_from_dict
+
+AUTHORIZATION_CODE_ENDPOINT = os.environ.get(
+    "AZURE_AUTHORIZATION_CODE_ENDPOINT", "/authorization-code/callback"
+)
+POPUP_LOGIN_ENDPOINT = os.environ.get(
+    "AZURE_POPUP_LOGIN_ENDPOINT", "/reflex-azure-auth/popup-login"
+)
+POPUP_LOGOUT_ENDPOINT = os.environ.get(
+    "AZURE_POPUP_LOGOUT_ENDPOINT", "/reflex-azure-auth/popup-logout"
+)
 
 
 class AzureAuthState(rx.State):
@@ -128,7 +140,7 @@ class AzureAuthState(rx.State):
     def _redirect_uri(self) -> str:
         current_url = urlparse(self.router.url)
         return current_url._replace(
-            path="/authorization-code/callback", query=None, fragment=None
+            path=AUTHORIZATION_CODE_ENDPOINT, query=None, fragment=None
         ).geturl()
 
     def _index_uri(self) -> str:
@@ -143,14 +155,15 @@ class AzureAuthState(rx.State):
         dedicated popup for the authorization flow.
         """
         return rx.call_script(
-            "window.open('/popup-login', 'login', 'width=600,height=600')"
+            WINDOW_OPEN(POPUP_LOGIN_ENDPOINT, "login", "width=600,height=600")
         )
 
     @rx.event
     async def redirect_to_logout_popup(self):
         """Open a small popup window to initiate the logout flow."""
+        self.access_token = self.id_token = ""
         return rx.call_script(
-            "window.open('/popup-logout', 'logout', 'width=600,height=600')"
+            WINDOW_OPEN(POPUP_LOGOUT_ENDPOINT, "logout", "width=600,height=600")
         )
 
     @rx.event
@@ -163,7 +176,10 @@ class AzureAuthState(rx.State):
         if self.is_iframed:
             return type(self).redirect_to_login_popup()
         if await self._validate_tokens():
-            return rx.toast("You are logged in.")
+            return [
+                self.post_auth_message(),
+                rx.toast("You are logged in."),
+            ]
 
         # store app state and code verifier in session
         self.app_state = secrets.token_urlsafe(64)
@@ -340,11 +356,4 @@ class AzureAuthState(rx.State):
             "id_token": self.id_token,
             "nonce": self.nonce,
         }
-        return [
-            rx.call_function(
-                rx.vars.FunctionStringVar.create("window.opener.postMessage")(
-                    payload, self.origin
-                )
-            ),
-            rx.call_script("window.setTimeout(() => window.close(), 500)"),
-        ]
+        return rx.call_script(POST_MESSAGE_AND_CLOSE_POPUP(payload, self.origin, 500))
