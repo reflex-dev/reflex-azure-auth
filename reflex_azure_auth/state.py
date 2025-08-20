@@ -5,7 +5,7 @@ import datetime
 import hashlib
 import os
 import secrets
-from urllib.parse import urlencode, urlparse
+from urllib.parse import parse_qsl, urlencode, urlparse
 
 import httpx
 import reflex as rx
@@ -141,6 +141,10 @@ class AzureAuthState(rx.State):
         current_url = urlparse(self.router.url)
         return current_url._replace(path="/", query=None, fragment=None).geturl()
 
+    def _query_params(self) -> dict[str, str]:
+        """Retrieve the query parameters from url since router.page is deprecated."""
+        return dict(parse_qsl(urlparse(self.router.url).query))
+
     @rx.event
     async def redirect_to_login_popup(self):
         """Open a small popup window to initiate the login flow.
@@ -237,8 +241,9 @@ class AzureAuthState(rx.State):
         and stores tokens for future use.
         """
         headers = {"Content-Type": "application/x-www-form-urlencoded"}
-        code = self.router.page.params.get("code")
-        app_state = self.router.page.params.get("state")
+        params = self._query_params()
+        code = params.get("code")
+        app_state = params.get("state")
         if app_state != self._app_state:
             self.error_message = "App state mismatch. Possible CSRF attack."
             return rx.toast.error("Authentication error")
