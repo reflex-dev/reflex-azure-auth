@@ -310,7 +310,7 @@ class AzureAuthState(rx.State):
             if self.id_token:
                 id_claims = _get_jwt_header_payload(self.id_token)[1]
                 if int(id_claims.get("exp", 0)) < int(
-                    datetime.datetime.utcnow().timestamp()
+                    datetime.datetime.now(datetime.timezone.utc).timestamp()
                 ):
                     return False
         except Exception:
@@ -318,8 +318,6 @@ class AzureAuthState(rx.State):
 
         if expiration_only:
             return True
-
-        # NOTE: full token validation is not currently implemented.
 
         try:
             id_claims = await verify_jwt(
