@@ -1,8 +1,13 @@
+"""Unit tests for OIDC helpers in reflex_azure_auth.
+
+These tests exercise OIDC metadata and JWT verification helpers.
+"""
+
 import datetime
 
 import pytest
 
-import reflex_azure_auth as raa
+from reflex_azure_auth import oidc
 
 
 class DummyResp:
@@ -59,12 +64,12 @@ async def test_fetch_oidc_and_jwks(monkeypatch):
                     async def get(self, url, timeout=10):
                         return await fake_get(url, timeout=timeout)
 
-                monkeypatch.setattr(raa, "_OIDC_CACHE", {})
-                monkeypatch.setattr(raa.httpx, "AsyncClient", lambda: FakeClient())
+                monkeypatch.setattr(oidc, "_OIDC_CACHE", {})
+                monkeypatch.setattr(oidc.httpx, "AsyncClient", lambda: FakeClient())
 
-                got_md = await raa._fetch_oidc_metadata(issuer)
+                got_md = await oidc._fetch_oidc_metadata(issuer)
                 assert got_md == md
-                got_jwks = await raa._fetch_jwks(md["jwks_uri"])
+                got_jwks = await oidc._fetch_jwks(md["jwks_uri"])
                 assert got_jwks == jwks
 
             @pytest.mark.asyncio
@@ -94,14 +99,14 @@ async def test_fetch_oidc_and_jwks(monkeypatch):
                     }
 
                 monkeypatch.setattr(
-                    raa, "_fetch_oidc_metadata", fake_fetch_oidc_metadata
+                    oidc, "_fetch_oidc_metadata", fake_fetch_oidc_metadata
                 )
-                monkeypatch.setattr(raa, "_fetch_jwks", fake_fetch_jwks)
+                monkeypatch.setattr(oidc, "_fetch_jwks", fake_fetch_jwks)
                 monkeypatch.setattr(
-                    raa.jwt, "decode", lambda token, ks: fake_decode(token, ks)
+                    oidc.jwt, "decode", lambda token, ks: fake_decode(token, ks)
                 )
 
-                claims = await raa.verify_jwt(
+                claims = await oidc.verify_jwt(
                     "dummy", audience="api://default", issuer=issuer
                 )
                 assert claims["aud"] == "api://default"

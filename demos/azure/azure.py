@@ -11,6 +11,7 @@ from reflex_azure_auth import (
 
 
 def index():
+    """Main page component for the demo app."""
     return rx.container(
         rx.vstack(
             rx.heading("Azure (Microsoft) Auth Demo"),
