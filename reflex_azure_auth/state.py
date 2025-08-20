@@ -81,11 +81,8 @@ class AzureAuthState(rx.State):
 
         # validate nonce
         try:
-            if (
-                hasattr(self, "_nonce")
-                and id_claims.get("nonce")
-                and id_claims.get("nonce") != self._nonce
-            ):
+            nonce_claim = id_claims.get("nonce")
+            if (self._nonce and nonce_claim) and nonce_claim != self._nonce:
                 print("Nonce mismatch")  # noqa: T201
                 return False
         except Exception:
@@ -95,9 +92,7 @@ class AzureAuthState(rx.State):
         try:
             at_hash_claim = id_claims.get("at_hash")
             if (
-                at_hash_claim
-                and hasattr(self, "_expected_at_hash")
-                and self._expected_at_hash
+                self._expected_at_hash and at_hash_claim
             ) and at_hash_claim != self._expected_at_hash:
                 print("at_hash mismatch")  # noqa: T201
                 return False
