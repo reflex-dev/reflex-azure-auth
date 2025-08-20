@@ -43,15 +43,14 @@ class AzureAuthState(rx.State):
 
     access_token: str = rx.Cookie()
     id_token: str = rx.Cookie()
-
-    app_state: str
-    code_verifier: str
-    nonce: str
-    redirect_to_url: str
     error_message: str
-
     is_iframed: bool = False
+
+    _redirect_to_url: str
+    _app_state: str
+    _code_verifier: str
     _requested_scopes: str = "openid email profile"
+    _nonce: str
     _expected_at_hash: str | None = None
 
     async def _validate_tokens(self, expiration_only: bool = False) -> bool:
@@ -83,9 +82,9 @@ class AzureAuthState(rx.State):
         # validate nonce
         try:
             if (
-                hasattr(self, "nonce")
+                hasattr(self, "_nonce")
                 and id_claims.get("nonce")
-                and id_claims.get("nonce") != self.nonce
+                and id_claims.get("nonce") != self._nonce
             ):
                 print("Nonce mismatch")  # noqa: T201
                 return False
@@ -182,25 +181,25 @@ class AzureAuthState(rx.State):
             ]
 
         # store app state and code verifier in session
-        self.app_state = secrets.token_urlsafe(64)
-        self.code_verifier = secrets.token_urlsafe(64)
-        self.redirect_to_url = self.router.url
+        self._app_state = secrets.token_urlsafe(64)
+        self._code_verifier = secrets.token_urlsafe(64)
+        self._redirect_to_url = self.router.url
 
         # calculate code challenge
-        hashed = hashlib.sha256(self.code_verifier.encode("ascii")).digest()
+        hashed = hashlib.sha256(self._code_verifier.encode("ascii")).digest()
         encoded = base64.urlsafe_b64encode(hashed)
         code_challenge = encoded.decode("ascii").strip("=")
 
         # store nonce for ID token validation
-        self.nonce = secrets.token_urlsafe(48)
+        self._nonce = secrets.token_urlsafe(48)
 
         # get request params
         query_params = {
             "client_id": client_id(),
             "redirect_uri": self._redirect_uri(),
             "scope": self._requested_scopes,
-            "state": self.app_state,
-            "nonce": self.nonce,
+            "state": self._app_state,
+            "nonce": self._nonce,
             "code_challenge": code_challenge,
             "code_challenge_method": "S256",
             "response_type": "code",
@@ -221,13 +220,13 @@ class AzureAuthState(rx.State):
             return type(self).redirect_to_logout_popup()
 
         # store app state in session
-        self.app_state = secrets.token_urlsafe(64)
+        self._app_state = secrets.token_urlsafe(64)
 
         # get request params
         query_params = {
             "id_token_hint": self.id_token,
             "post_logout_redirect_uri": self._index_uri(),
-            "state": self.app_state,
+            "state": self._app_state,
         }
 
         # build request_uri
@@ -245,7 +244,7 @@ class AzureAuthState(rx.State):
         headers = {"Content-Type": "application/x-www-form-urlencoded"}
         code = self.router.page.params.get("code")
         app_state = self.router.page.params.get("state")
-        if app_state != self.app_state:
+        if app_state != self._app_state:
             self.error_message = "App state mismatch. Possible CSRF attack."
             return rx.toast.error("Authentication error")
         if not code:
@@ -255,7 +254,7 @@ class AzureAuthState(rx.State):
             "grant_type": "authorization_code",
             "code": code,
             "redirect_uri": self._redirect_uri(),
-            "code_verifier": self.code_verifier,
+            "code_verifier": self._code_verifier,
         }
         async with httpx.AsyncClient() as client:
             resp = await client.post(
@@ -275,7 +274,7 @@ class AzureAuthState(rx.State):
             id_token=exchange["id_token"],
         )
 
-        return rx.redirect(self.redirect_to_url)
+        return rx.redirect(self._redirect_to_url)
 
     async def _set_tokens(self, access_token: str, id_token: str):
         self.access_token = access_token
@@ -337,7 +336,7 @@ class AzureAuthState(rx.State):
         """
         if event["data"].get("type") != "auth":
             return
-        self.nonce = event["data"].get("nonce", self.nonce)
+        self._nonce = event["data"].get("nonce", self._nonce)
         await self._set_tokens(
             access_token=event["data"].get("access_token"),
             id_token=event["data"].get("id_token"),
@@ -354,6 +353,6 @@ class AzureAuthState(rx.State):
             "type": "auth",
             "access_token": self.access_token,
             "id_token": self.id_token,
-            "nonce": self.nonce,
+            "nonce": self._nonce,
         }
         return rx.call_script(POST_MESSAGE_AND_CLOSE_POPUP(payload, self.origin, 500))
