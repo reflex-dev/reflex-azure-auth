@@ -11,6 +11,7 @@ authors = [
 ]
 dependencies = [
     "reflex-enterprise (>=0.3.0)",
+    "reflex (>=0.8.4)",
     "httpx",
     "authlib",
 ]
