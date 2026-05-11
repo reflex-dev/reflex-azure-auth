@@ -1,5 +1,71 @@
 # reflex-azure-auth
 
+> **This repository is archived.** Use the OIDC support built into the
+> `reflex-enterprise` package instead.
+>
+> Notably, this package stores tokens in `LocalStorage`, which is readable by
+> any script running on the page (e.g. via XSS). The `reflex-enterprise` OIDC
+> state stores tokens in HttpOnly, `Secure`, `SameSite=Strict` cookies, and
+> additionally provides refresh tokens with cross-tab sync, nonce / `at_hash`
+> validation, and granted-scope tracking. Functionally, anything this package
+> does is also covered there.
+>
+> ### Migrating
+>
+> Subclass `OIDCAuthState` with `__provider__ = "azure"` — the same
+> `AZURE_CLIENT_ID`, `AZURE_CLIENT_SECRET`, and `AZURE_ISSUER_URI` env vars are
+> picked up automatically (config lookup is `{PROVIDER}_*`):
+>
+> ```python
+> import reflex as rx
+> from reflex_enterprise.auth.oidc.state import OIDCAuthState
+>
+> class AzureAuthState(OIDCAuthState, rx.State):
+>     __provider__ = "azure"
+> ```
+>
+> For multi-tenant apps (issuer contains `/common/` or `/organizations/`),
+> override `_valid_issuers` to expand the accepted `iss` claim values to your
+> allow-listed tenants. This replaces the `AZURE_VALID_TENANT_IDS` env var:
+>
+> ```python
+> import os
+>
+> MSA_ISSUER = "9188040d-6c67-4c5b-b112-36a304b66dad"
+>
+> class AzureAuthState(OIDCAuthState, rx.State):
+>     __provider__ = "azure"
+>
+>     async def _valid_issuers(self) -> list[str] | None:
+>         issuer = (await self._issuer_uri()).rstrip("/")
+>         if "/consumers/v2.0" in issuer:
+>             return [issuer.replace("/consumers/", f"/{MSA_ISSUER}/")]
+>         if "/common/" in issuer or "/organizations/" in issuer:
+>             template = issuer.replace("/common/", "/{tid}/").replace(
+>                 "/organizations/", "/{tid}/"
+>             )
+>             tenants = [
+>                 t.strip()
+>                 for t in os.environ.get("AZURE_VALID_TENANT_IDS", "").split(",")
+>                 if t.strip()
+>             ]
+>             return [template.format(tid=t) for t in tenants] or None
+>         return None
+> ```
+>
+> Render the login button — endpoints are registered automatically on first
+> use, so no explicit `register_auth_endpoints(app)` call is needed:
+>
+> ```python
+> AzureAuthState.get_login_button("Log In with Microsoft")
+> ```
+>
+> Logout (`redirect_to_logout`) and `userinfo` keep the same names and shape.
+
+---
+
+## Legacy usage (deprecated)
+
 This package requires the `reflex_enterprise` package to be installed.
 
 ## Installation
